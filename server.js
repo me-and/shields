@@ -2049,11 +2049,11 @@ cache(function(data, match, sendBadge, request) {
       badgeData.text[1] = count;
       if (count == 0) {
         badgeData.colorscheme = 'brightgreen';
-      } else if (score < 5) {
+      } else if (count < 5) {
         badgeData.colorscheme = 'green';
-      } else if (score < 10) {
+      } else if (count < 10) {
         badgeData.colorscheme = 'yellowgreen';
-      } else if (score < 20) {
+      } else if (count < 20) {
         badgeData.colorscheme = 'yellow';
       } else {
         badgeData.colorscheme = 'red';
