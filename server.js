@@ -2035,12 +2035,16 @@ cache(function(data, match, sendBadge, request) {
       return;
     }
     try {
-      var count = buffer.match(/>([0-9]+ issues?)/)[1];
-      var num = count.match(/([0-9]+)/)[1];
+      var count = buffer.match(/>([0-9]+) issues?/)[1];
       if (!count) {
         badgeData.text[1] = 'malformed';
         sendBadge(format, badgeData);
         return;
+      }
+      if (count == 1) {
+        badgeData.text[1] = '1 issue';
+      } else {
+        badgeData.text[1] = count + 'issues';
       }
       badgeData.text[1] = count;
       if (count == 0) {
