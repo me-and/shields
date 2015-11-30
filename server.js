@@ -2044,7 +2044,7 @@ cache(function(data, match, sendBadge, request) {
       if (count == 1) {
         badgeData.text[1] = '1 issue';
       } else {
-        badgeData.text[1] = count + 'issues';
+        badgeData.text[1] = count + ' issues';
       }
       badgeData.text[1] = count;
       if (count == 0) {
