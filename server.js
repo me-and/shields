@@ -2026,7 +2026,7 @@ camp.route(/^\/codeclimate\/issues\/(.+)\.(svg|png|gif|jpg|json)$/,
 cache(function(data, match, sendBadge, request) {
   var userRepo = match[1];  // eg, `github/me-and/mdf`.
   var format = match[2];
-  var options = 'https://codeclimate.com/' + userRepo + 'badges/issue_count.svg'
+  var options = 'https://codeclimate.com/' + userRepo + '/badges/issue_count.svg'
   var badgeData = getBadgeData('code climate', data);
   request(options, function(err, res, buffer) {
     if (err != null) {
