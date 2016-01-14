@@ -284,6 +284,64 @@ camp.notfound(/.*/, function(query, match, end, request) {
 
 // Vendors.
 
+// JIRA issue integration
+camp.route(/^\/jira\/issue\/(http(?:s)?)\/(.+)\/([^\/]+)\.(svg|png|gif|jpg|json)$/,
+cache(function (data, match, sendBadge, request) {
+  var protocol = match[1];  // eg, https
+  var host = match[2];      // eg, issues.apache.org/jira
+  var issueKey = match[3];  // eg, KAFKA-2896
+  var format = match[4];
+
+  var options = {
+    method: 'GET',
+    json: true,
+    uri: protocol + '://' + host + '/rest/api/2/issue/' +
+      encodeURIComponent(issueKey)
+  };
+  if (serverSecrets && serverSecrets.jira_username) {
+    options.auth = {
+      user: serverSecrets.jira_username,
+      pass: serverSecrets.jira_password
+    };
+  }
+
+  // map JIRA color names to closest shields color schemes
+  var colorMap = {
+    'medium-gray': 'lightgrey',
+    'green': 'green',
+    'yellow': 'yellow',
+    'brown': 'orange',
+    'warm-red': 'red',
+    'blue-gray': 'blue'
+  };
+
+  var badgeData = getBadgeData(issueKey, data);
+  request(options, function (err, res, json) {
+    if (err !== null) {
+      badgeData.text[1] = 'inaccessible';
+      sendBadge(format, badgeData);
+      return;
+    }
+    try {
+      var jiraIssue = json;
+      if (jiraIssue.fields && jiraIssue.fields.status) {
+        if (jiraIssue.fields.status.name) {
+          badgeData.text[1] = jiraIssue.fields.status.name; // e.g. "In Development"
+        }
+        if (jiraIssue.fields.status.statusCategory) {
+          badgeData.colorscheme = colorMap[jiraIssue.fields.status.statusCategory.colorName] || 'lightgrey';
+        }
+      } else {
+        badgeData.text[1] = 'invalid';
+      }
+      sendBadge(format, badgeData);
+    } catch (e) {
+      badgeData.text[1] = 'invalid';
+      sendBadge(format, badgeData);
+    }
+  });
+}));
+
 // Travis integration
 camp.route(/^\/travis(-ci)?\/([^\/]+\/[^\/]+)(?:\/(.+))?\.(svg|png|gif|jpg|json)$/,
 cache(function(data, match, sendBadge, request) {
@@ -347,6 +405,7 @@ cache(function(data, match, sendBadge, request) {
       badgeData.text[1] = res;
       if (res === 'shippable') {
         badgeData.colorscheme = 'brightgreen';
+        badgeData.text[1] = 'passing';
       } else if (res === 'unshippable') {
         badgeData.colorscheme = 'red';
       } else {
@@ -384,7 +443,7 @@ cache(function(data, match, sendBadge, request) {
       if (build.status === 'finished') {
         if (build.result === 'passed') {
           badgeData.colorscheme = 'brightgreen';
-          badgeData.text[1] = build.result;
+          badgeData.text[1] = 'passing';
         } else {
           badgeData.colorscheme = 'red';
           badgeData.text[1] = build.result;
@@ -425,7 +484,7 @@ cache(function(data, match, sendBadge, request) {
       if (build.status === 'finished') {
         if (build.result === 'passed') {
           badgeData.colorscheme = 'brightgreen';
-          badgeData.text[1] = build.result;
+          badgeData.text[1] = 'passing';
         } else {
           badgeData.colorscheme = 'red';
           badgeData.text[1] = build.result;
@@ -456,7 +515,7 @@ cache(function (data, match, sendBadge, request) {
       process: function (data, badgeData) {
         downloads = data.crate? data.crate.downloads: data.version.downloads;
         version = data.version && data.version.num;
-        badgeData.text[1] = metric(downloads) + (version? ' version ' + version: ' total');
+        badgeData.text[1] = metric(downloads) + (version? ' version ' + version: '');
         badgeData.colorscheme = downloadCountColor(downloads);
       }
     },
@@ -565,6 +624,7 @@ function teamcity_badge(url, buildId, advanced, format, data, sendBadge) {
         badgeData.text[1] = (data.status || '').toLowerCase();
       if (data.status === 'SUCCESS') {
         badgeData.colorscheme = 'brightgreen';
+        badgeData.text[1] = 'passing';
       } else {
         badgeData.colorscheme = 'red';
       }
@@ -764,6 +824,7 @@ cache(function(data, match, sendBadge, request) {
 
       if (data.message === 'passed') {
         badgeData.colorscheme = 'brightgreen'
+        badgeData.text[1] = 'passing';
       } else if (/^passed .* new defects$/.test(data.message)) {
         badgeData.colorscheme = 'yellow';
       } else if (data.message === 'pending') {
@@ -826,11 +887,14 @@ cache(function(data, match, sendBadge, request) {
 }));
 
 // Gratipay integration.
-camp.route(/^\/(?:gittip|gratipay(?:\/user)?)\/(.*)\.(svg|png|gif|jpg|json)$/,
+camp.route(/^\/(?:gittip|gratipay(\/user|\/team)?)\/(.*)\.(svg|png|gif|jpg|json)$/,
 cache(function(data, match, sendBadge, request) {
-  var user = match[1];  // eg, `dougwilson`.
-  var format = match[2];
-  var apiUrl = 'https://www.gratipay.com/~' + user + '/public.json';
+  var type = match[1];  // eg, `user`.
+  var user = match[2];  // eg, `dougwilson`.
+  var format = match[3];
+  if (type === '') { type = '/user'; }
+  if (type === '/user') { user = '~' + user; }
+  var apiUrl = 'https://gratipay.com/' + user + '/public.json';
   var badgeData = getBadgeData('tips', data);
   if (badgeData.template === 'social') {
     badgeData.logo = badgeData.logo || logos.gratipay;
@@ -845,13 +909,12 @@ cache(function(data, match, sendBadge, request) {
       var data = JSON.parse(buffer);
       var receiving = data.receiving || data.taking;
       if (receiving) {
-        var money = parseInt(receiving);
-        badgeData.text[1] = '$' + metric(money) + '/week';
-        if (money === 0) {
+        badgeData.text[1] = '$' + metric(receiving) + '/week';
+        if (receiving === 0) {
           badgeData.colorscheme = 'red';
-        } else if (money < 10) {
+        } else if (receiving < 10) {
           badgeData.colorscheme = 'yellow';
-        } else if (money < 100) {
+        } else if (receiving < 100) {
           badgeData.colorscheme = 'green';
         } else {
           badgeData.colorscheme = 'brightgreen';
@@ -1069,7 +1132,7 @@ cache(function(data, match, sendBadge, request) {
         break;
       case 't':
         var downloads = data.package.downloads.total;
-        badgeData.text[1] = metric(downloads) + ' total';
+        badgeData.text[1] = metric(downloads);
         break;
       }
       badgeData.colorscheme = downloadCountColor(downloads);
@@ -1210,6 +1273,71 @@ cache(function(data, match, sendBadge, request) {
   });
 }));
 
+// Package Control integration.
+camp.route(/^\/packagecontrol\/(dm|dw|dd|dt)\/(.*)\.(svg|png|gif|jpg|json)$/,
+cache(function(data, match, sendBadge, request) {
+  var info = match[1];  // either `dm`, `dw`, `dd` or dt`.
+  var userRepo = match[2];  // eg, `Package%20Control`.
+  var format = match[3];
+  var apiUrl = 'https://packagecontrol.io/packages/' + userRepo + '.json';
+  var badgeData = getBadgeData('downloads', data);
+  request(apiUrl, function(err, res, buffer) {
+    if (err != null) {
+      badgeData.text[1] = 'inaccessible';
+      sendBadge(format, badgeData);
+    }
+    try {
+      var data = JSON.parse(buffer);
+      var downloads = 0;
+      switch (info.charAt(1)) {
+      case 'm':
+        // daily downloads are separated by Operating System
+        var platforms = data.installs.daily.data;
+        platforms.forEach(function(platform) {
+          // loop through the first 30 days or 1 month
+          for (var i = 0; i < 30; i++) {
+            // add the downloads for that day for that platform
+            downloads += platform.totals[i];
+          }
+        });
+        badgeData.text[1] = metric(downloads) + '/month';
+        break;
+      case 'w':
+        // daily downloads are separated by Operating System
+        var platforms = data.installs.daily.data;
+        platforms.forEach(function(platform) {
+          // loop through the first 7 days or 1 week
+          for (var i = 0; i < 7; i++) {
+            // add the downloads for that day for that platform
+            downloads += platform.totals[i];
+          }
+        });
+        badgeData.text[1] = metric(downloads) + '/week';
+        break;
+      case 'd':
+        // daily downloads are separated by Operating System
+        var platforms = data.installs.daily.data;
+        platforms.forEach(function(platform) {
+          // use the downloads from yesterday
+          downloads += platform.totals[1];
+        });
+        badgeData.text[1] = metric(downloads) + '/day';
+        break;
+      case 't':
+        // all-time downloads are already compiled
+        downloads = data.installs.total;
+        badgeData.text[1] = metric(downloads);
+        break;
+      }
+      badgeData.colorscheme = downloadCountColor(downloads);
+      sendBadge(format, badgeData);
+    } catch(e) {
+      badgeData.text[1] = 'invalid';
+      sendBadge(format, badgeData);
+    }
+  });
+}));
+
 // npm download integration.
 camp.route(/^\/npm\/dm\/(.*)\.(svg|png|gif|jpg|json)$/,
 cache(function(data, match, sendBadge, request) {
@@ -1268,7 +1396,7 @@ cache(function (data, match, sendBadge, request) {
         totalDownloads = totalDownloads + downloads[index].downloads;
       }
 
-      badgeData.text[1] = metric(totalDownloads) + ' total';
+      badgeData.text[1] = metric(totalDownloads);
       if (totalDownloads === 0) {
         badgeData.colorscheme = 'red';
       } else {
@@ -1849,7 +1977,7 @@ cache(function(data, match, sendBadge, request) {
             break;
           case 't':
             var downloads = data.downloads.all;
-            badgeData.text[1] = metric(downloads) + ' total';
+            badgeData.text[1] = metric(downloads);
             break;
         }
         badgeData.colorscheme = downloadCountColor(downloads);
@@ -2123,8 +2251,8 @@ cache(function(data, match, sendBadge, request) {
   var slashesInRepo = 2;
   if (repoParts[0] === 'gp') { slashesInRepo = 1; }
   if ((repoParts.length - 1) > slashesInRepo) {
-    branch = repoParts[repoParts.length - 1];
-    repo = repoParts.slice(0, -1).join('/');
+    branch = repoParts.slice(slashesInRepo + 1).join('/');
+    repo = repoParts.slice(0, slashesInRepo + 1).join('/');
   }
   var apiUrl = 'https://scrutinizer-ci.com/api/repositories/' + repo;
   var badgeData = getBadgeData('coverage', data);
@@ -2162,8 +2290,8 @@ cache(function(data, match, sendBadge, request) {
   var slashesInRepo = 2;
   if (repoParts[0] === 'gp') { slashesInRepo = 1; }
   if ((repoParts.length - 1) > slashesInRepo) {
-    branch = repoParts[repoParts.length - 1];
-    repo = repoParts.slice(0, -1).join('/');
+    branch = repoParts.slice(slashesInRepo + 1).join('/');
+    repo = repoParts.slice(0, slashesInRepo + 1).join('/');
   }
   var apiUrl = 'https://scrutinizer-ci.com/api/repositories/' + repo;
   var badgeData = getBadgeData('build', data);
@@ -2181,6 +2309,7 @@ cache(function(data, match, sendBadge, request) {
       badgeData.text[1] = res;
       if (res === 'passed') {
         badgeData.colorscheme = 'brightgreen';
+        badgeData.text[1] = 'passing';
       } else if (res === 'failed' || res === 'error') {
         badgeData.colorscheme = 'red';
       } else if (res === 'pending') {
@@ -2209,8 +2338,8 @@ cache(function(data, match, sendBadge, request) {
   var slashesInRepo = 2;
   if (repoParts[0] === 'gp') { slashesInRepo = 1; }
   if ((repoParts.length - 1) > slashesInRepo) {
-    branch = repoParts[repoParts.length - 1];
-    repo = repoParts.slice(0, -1).join('/');
+    branch = repoParts.slice(slashesInRepo + 1).join('/');
+    repo = repoParts.slice(0, slashesInRepo + 1).join('/');
   }
   var apiUrl = 'https://scrutinizer-ci.com/api/repositories/' + repo;
   var badgeData = getBadgeData('code quality', data);
@@ -2309,14 +2438,14 @@ cache(function(data, match, sendBadge, request) {
     }
     try {
       var nameMatch = buffer.match(/(devD|d)ependencies/)[0];
-      var statusMatch = buffer.match(/'14'>(.+)<\/text>\n<\/g>/)[1];
+      var statusMatch = buffer.match(/'14'>(.+)<\/text>\s*<\/g>/)[1];
       badgeData.text[0] = nameMatch;
       badgeData.text[1] = statusMatch;
       if (statusMatch === 'up-to-date') {
         badgeData.colorscheme = 'brightgreen';
       } else if (statusMatch === 'out-of-date') {
         badgeData.colorscheme = 'yellow';
-      } else if (statusMatch === 'update!') {
+      } else if (statusMatch === 'up-to-date') {
         badgeData.colorscheme = 'red';
       } else if (statusMatch === 'none') {
         badgeData.colorscheme = 'brightgreen';
@@ -2366,11 +2495,18 @@ cache(function(data, match, sendBadge, request) {
 }));
 
 // Codacy integration
-camp.route(/^\/codacy\/(.+)\.(svg|png|gif|jpg|json)$/,
+camp.route(/^\/codacy?\/([^\/]+)(?:\/(.+))?\.(svg|png|gif|jpg|json)$/,
 cache(function(data, match, sendBadge, request) {
   var projectId = match[1];  // eg. e27821fb6289410b8f58338c7e0bc686
-  var format = match[2];
-  var url = 'https://www.codacy.com/project/badge/' + projectId;
+  var branch = match[2];
+  var format = match[3];
+
+  queryParams = {};
+  if (branch) {
+    queryParams.branch = branch;
+  }
+  var query = querystring.stringify(queryParams);
+  var url = 'https://www.codacy.com/project/badge/' + projectId + '?' + query;
   var badgeData = getBadgeData('code quality', data);
   fetchFromSvg(request, url, function(err, res) {
     if (err != null) {
@@ -3175,7 +3311,7 @@ function mapNugetFeed(pattern, offset, getInfo) {
       }
       try {
         var downloads = data.DownloadCount;
-        badgeData.text[1] = metric(downloads) + ' total';
+        badgeData.text[1] = metric(downloads);
         badgeData.colorscheme = downloadCountColor(downloads);
         sendBadge(format, badgeData);
       } catch(e) {
@@ -3236,7 +3372,7 @@ cache(function(data, match, sendBadge, request) {
         var total = json.downloads;
         badgeData.colorscheme = downloadCountColor(total);
         badgeData.text[0] = 'downloads';
-        badgeData.text[1] = metric(total) + ' total';
+        badgeData.text[1] = metric(total);
       } else if (info === 'e') {
         var endorsement = json.endorsement;
         if (endorsement === 'approved') {
@@ -3321,6 +3457,13 @@ cache(function(data, match, sendBadge, request) {
     uri: scheme + '://' + host + '/job/' + job + '/api/json?tree=color'
   };
 
+  if (serverSecrets && serverSecrets.jenkins_user) {
+    options.auth = {
+      user: serverSecrets.jenkins_user,
+      pass: serverSecrets.jenkins_pass
+    };
+  }
+
   var badgeData = getBadgeData('build', data);
   request(options, function(err, res, json) {
     if (err !== null) {
@@ -3330,7 +3473,7 @@ cache(function(data, match, sendBadge, request) {
     }
 
     try {
-      if (json.color === 'blue') {
+      if (json.color === 'blue' || json.color === 'green') {
         badgeData.colorscheme = 'brightgreen';
         badgeData.text[1] = 'passing';
       } else if (json.color === 'red') {
@@ -3368,6 +3511,13 @@ cache(function(data, match, sendBadge, request) {
       + '/lastBuild/api/json?tree=actions[failCount,skipCount,totalCount]'
   };
 
+  if (serverSecrets && serverSecrets.jenkins_user) {
+    options.auth = {
+      user: serverSecrets.jenkins_user,
+      pass: serverSecrets.jenkins_pass
+    };
+  }
+
   var badgeData = getBadgeData('tests', data);
   request(options, function(err, res, json) {
     if (err !== null) {
@@ -3396,6 +3546,59 @@ cache(function(data, match, sendBadge, request) {
       } else {
         badgeData.colorscheme = 'yellow';
       }
+      sendBadge(format, badgeData);
+    } catch(e) {
+      badgeData.text[1] = 'invalid';
+      sendBadge(format, badgeData);
+    }
+  });
+}));
+
+// Jenkins coverage integration
+camp.route(/^\/jenkins(-ci)?\/c\/(http(s)?)\/((?:[^\/]+)(?:\/.+?)?)\/([^\/]+)\.(svg|png|gif|jpg|json)$/,
+cache(function(data, match, sendBadge, request) {
+  var scheme = match[2];  // http(s)
+  var host = match[4];  // jenkins.qa.ubuntu.com
+  var job = match[5];  // precise-desktop-amd64_default
+  var format = match[6];
+  var options = {
+    json: true,
+    uri: scheme + '://' + host + '/job/' + job
+      + '/lastBuild/cobertura/api/json?tree=results[elements[name,denominator,numerator,ratio]]'
+  };
+
+  if (serverSecrets && serverSecrets.jenkins_user) {
+    options.auth = {
+      user: serverSecrets.jenkins_user,
+      pass: serverSecrets.jenkins_pass
+    };
+  }
+
+  var badgeData = getBadgeData('coverage', data);
+  request(options, function(err, res, json) {
+    if (err !== null) {
+      badgeData.text[1] = 'inaccessible';
+      sendBadge(format, badgeData);
+      return;
+    }
+
+    try {
+      var coverageObject = json.results.elements.filter(function (obj) {
+        return obj.name === 'Lines';
+      })[0];
+      if (coverageObject === undefined) {
+        badgeData.text[1] = 'inaccessible';
+        sendBadge(format, badgeData);
+        return;
+      }
+      var coverage = coverageObject.ratio;
+      if (+coverage !== +coverage) {
+        badgeData.text[1] = 'unknown';
+        sendBadge(format, badgeData);
+        return;
+      }
+      badgeData.text[1] = coverage.toFixed(0) + '%';
+      badgeData.colorscheme = coveragePercentageColor(coverage);
       sendBadge(format, badgeData);
     } catch(e) {
       badgeData.text[1] = 'invalid';
@@ -3465,7 +3668,7 @@ cache(function(data, match, sendBadge, request) {
 
       switch (statusMatch[1]) {
         case 'success':
-          badgeData.text[1] = 'passed';
+          badgeData.text[1] = 'passing';
           badgeData.colorscheme = 'brightgreen';
           break;
         case 'projectnotfound':
@@ -3484,6 +3687,54 @@ cache(function(data, match, sendBadge, request) {
           break;
         case 'stopped':
           badgeData.text[1] = 'not built';
+          break;
+      }
+      sendBadge(format, badgeData);
+    } catch(e) {
+      badgeData.text[1] = 'not found';
+      sendBadge(format, badgeData);
+    }
+  });
+}));
+
+// Magnum CI integration
+camp.route(/^\/magnumci\/ci\/([^\/]+)(?:\/(.+))?\.(svg|png|gif|jpg|json)$/,
+cache(function(data, match, sendBadge, request) {
+  var projectId = match[1]; // E.g. 96ffb83fa700f069024921b0702e76ff
+  var branch = match[2];    // E.g. master
+  var format = match[3];
+  var options = {
+    method: 'GET',
+    uri: 'https://magnum-ci.com/status/' + projectId + '.png'
+  };
+  if (branch != null) {
+    options.uri += '?branch=' + branch;
+  }
+  var badgeData = getBadgeData('build', data);
+  request(options, function(err, res) {
+    if (err != null) {
+      badgeData.text[1] = 'inaccessible';
+      sendBadge(format, badgeData);
+      return;
+    }
+    try {
+      var statusMatch = res.headers['content-disposition']
+                           .match(/filename="(.+)\.png"/);
+      if (!statusMatch) {
+        badgeData.text[1] = 'unknown';
+        sendBadge(format, badgeData);
+        return;
+      }
+
+      switch (statusMatch[1]) {
+        case 'pass':
+          badgeData.text[1] = 'passing';
+          badgeData.colorscheme = 'brightgreen';
+          break;
+          break;
+        case 'fail':
+          badgeData.text[1] = 'failing';
+          badgeData.colorscheme = 'red';
           break;
       }
       sendBadge(format, badgeData);
@@ -3653,7 +3904,7 @@ cache(function(data, match, sendBadge, request) {
     }
     try {
       var total = JSON.parse(buffer).downloaded;
-      badgeData.text[1] = metric(total) + ' total';
+      badgeData.text[1] = metric(total);
       if (total === 0) {
         badgeData.colorscheme = 'red';
       } else if (total < 100) {
@@ -3880,7 +4131,7 @@ cache(function(data, match, sendBadge, request) {
       sendBadge(format, badgeData);
       return;
     }
-    badgeData.text[1] = metric(dls) + ' total';
+    badgeData.text[1] = metric(dls);
     badgeData.colorscheme = 'green';
     sendBadge(format, badgeData);
   });
@@ -4272,7 +4523,8 @@ cache(function(data, match, sendBadge, request) {
   var path = match[2];   // eg, shields.io
   var format = match[3];
   var page = encodeURIComponent(scheme + '://' + path);
-  var url = 'http://cdn.api.twitter.com/1/urls/count.json?url=' + page;
+  // The URL API died: #568.
+  //var url = 'http://cdn.api.twitter.com/1/urls/count.json?url=' + page;
   var badgeData = getBadgeData('tweet', data);
   if (badgeData.template === 'social') {
     badgeData.logo = badgeData.logo || logos.twitter;
@@ -4281,21 +4533,46 @@ cache(function(data, match, sendBadge, request) {
       'https://twitter.com/search?q=' + page,
      ];
   }
-  request(url, function(err, res, buffer) {
+  badgeData.text[1] = '';
+  badgeData.colorscheme = '55ACEE';
+  sendBadge(format, badgeData);
+}));
+
+// Twitter follow badge.
+camp.route(/^\/twitter\/follow\/@?([^\/]+)\.(svg|png|gif|jpg|json)$/,
+cache(function(data, match, sendBadge, request) {
+  var user = match[1]; // eg, shields_io
+  var format = match[2];
+  var options = {
+    url: 'http://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=' + user
+  };
+  var badgeData = getBadgeData('Follow', data);
+  badgeData.text[0] = 'Follow ' + user;
+  badgeData.colorscheme = '55ACEE';
+  if (badgeData.template === 'social') {
+    badgeData.logo = badgeData.logo || logos.twitter;
+  }
+  badgeData.links = [
+    'https://twitter.com/intent/follow?screen_name=' + user,
+    'https://twitter.com/' + user + '/followers'
+  ];
+  badgeData.text[1] = '';
+  request(options, function(err, res, buffer) {
     if (err != null) {
-      badgeData.text[1] = 'inaccessible';
       sendBadge(format, badgeData);
       return;
     }
     try {
-      var data = JSON.parse(buffer);
-      badgeData.text[1] = metric(data.count);
-      badgeData.colorscheme = '55ACEE';
-      sendBadge(format, badgeData);
+      // The data is formatted as an array.
+      var data = JSON.parse(buffer)[0];
+      // data.followers_count could be zero… don't just check if falsey.
+      if (data.followers_count != null){
+        badgeData.text[1] = metric(data.followers_count);
+      }
     } catch(e) {
-      badgeData.text[1] = 'invalid';
-      sendBadge(format, badgeData);
+      console.error(e);
     }
+    sendBadge(format, badgeData);
   });
 }));
 
@@ -4319,6 +4596,7 @@ cache(function(data, match, sendBadge, request) {
       badgeData.text[1] = res.toLowerCase();
       if (res === 'Passed') {
         badgeData.colorscheme = 'brightgreen';
+        badgeData.text[1] = 'passing';
       } else if (res === 'Failed') {
         badgeData.colorscheme = 'red';
       }
@@ -4391,6 +4669,53 @@ cache(function(data, match, sendBadge, request) {
   }
   sendBadge(format, badgeData);
 }));
+
+// StackExchange integration.
+camp.route(/^\/stackexchange\/([^\/]+)\/([^\/])\/([^\/]+)\.(svg|png|gif|jpg|json)$/,
+cache(function(data, match, sendBadge, request) {
+  var site = match[1]; // eg, stackoverflow
+  var info = match[2]; // either `r`
+  var item = match[3]; // eg, 232250
+  var format = match[4];
+  var path;
+  if (info === 'r') {
+    path = 'users/' + item;
+  } else if (info === 't') {
+    path = 'tags/' + item + '/info';
+  }
+  var options = {
+    method: 'GET',
+    uri: 'https://api.stackexchange.com/2.2/' + path + '?site=' + site,
+    gzip: true
+  }
+  var badgeData = getBadgeData(site, data);
+  request(options, function (err, res, buffer) {
+    if (err != null) {
+      badgeData.text[1] = 'inaccessible';
+      sendBadge(badgeData, format);
+      return;
+    }
+    try {
+      var data = JSON.parse(buffer.toString());
+
+      if (info === 'r') {
+        var reputation = data.items[0].reputation;
+        badgeData.text[0] = site + ' reputation';
+        badgeData.text[1] = metric(reputation);
+        badgeData.colorscheme = floorCountColor(1000, 10000, 20000);
+      } else if (info === 't') {
+        var count = data.items[0].count;
+        badgeData.text[0] = site + ' ' + item + ' questions';
+        badgeData.text[1] = metric(count);
+        badgeData.colorscheme = floorCountColor(1000, 10000, 20000);
+      }
+      sendBadge(format, badgeData);
+    } catch(e) {
+      badgeData.text[1] = 'invalid';
+      sendBadge(format, badgeData);
+    }
+  })}
+));
 
 // Any badge.
 camp.route(/^\/(:|badge\/)(([^-]|--)*?)-(([^-]|--)*)-(([^-]|--)+)\.(svg|png|gif|jpg)$/,
@@ -4870,4 +5195,43 @@ function phpStableVersion(version) {
   }
   // normal or patch
   return (versionData.modifier === 3) || (versionData.modifier === 4);
+}
+
+// This searches the serverSecrets for a twitter consumer key
+// and secret, and exchanges them for a bearer token to use for all requests.
+function fetchTwitterToken() {
+  if(serverSecrets.twitter_consumer_key && serverSecrets.twitter_consumer_secret){
+    // fetch a bearer token good for this app session
+    // construct this bearer request with a base64 encoding of key:secret
+    // docs for this are here: https://dev.twitter.com/oauth/application-only
+    var twitter_bearer_credentials = escape(serverSecrets.twitter_consumer_key) + ':' + escape(serverSecrets.twitter_consumer_secret);
+    var options = {
+      url: 'https://api.twitter.com/oauth2/token',
+      headers: {
+        // is this the best way to base 64 encode a string?
+        Authorization: 'Basic '+(new Buffer(twitter_bearer_credentials)).toString('base64'),
+        'Content-type': 'application/x-www-form-urlencoded;charset=UTF-8'
+      },
+      form: 'grant_type=client_credentials',
+      method: 'POST'
+    };
+    console.log('Fetching twitter bearer token...');
+    request(options,function(err,res,buffer){
+      if(err){
+        console.error('Error fetching twitter bearer token, error: ', err);
+        return;
+      }
+      try{
+        var data = JSON.parse(buffer);
+        if(data.token_type === 'bearer'){
+          serverSecrets.twitter_bearer_token = data.access_token;
+          console.log('Fetched twitter bearer token');
+          return;
+        }
+        console.error('Error fetching twitter bearer token, data: %j', data);
+      } catch(e) {
+        console.error('Error fetching twitter bearer token, buffer: %s, ', buffer, e);
+      }
+    });
+  }
 }
