@@ -2046,7 +2046,6 @@ cache(function(data, match, sendBadge, request) {
       } else {
         badgeData.text[1] = count + ' issues';
       }
-      badgeData.text[1] = count;
       if (count == 0) {
         badgeData.colorscheme = 'brightgreen';
       } else if (count < 5) {
